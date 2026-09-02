@@ -7,9 +7,10 @@ graph LR
   %% Actors
   %% =========================
 
-  S([user])
+  S([Student])
   P([Parent])
   TT([Teacher / Therapist])
+  L([Gemini LLM])
 
   %% =========================
   %% System Boundary
@@ -52,6 +53,8 @@ graph LR
   TT --- PD
   TT --- CV
 
+  L --- RS
+
   %% =========================
   %% Include / Extend
   %% =========================
@@ -66,8 +69,10 @@ graph LR
   classDef actor fill:#f2f8ff,stroke:#0366d6,stroke-width:2px;
   classDef usecase fill:#fff8e6,stroke:#b58900,stroke-width:1.5px;
 
-  class S,P,TT actor;
+  class S,P,TT,L actor;
   class BS,SS,CS,RS,DR,SA,ED,SY,PD,CV usecase;
+
 ```
+
 
 <img width="1125" height="720" alt="image" src="https://github.com/user-attachments/assets/99e752b2-8b6b-4f03-b8e9-f90e95467462" />
