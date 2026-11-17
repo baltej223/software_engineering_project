@@ -1,21 +1,9 @@
 import { API_ENDPOINTS, API_KEYS } from "@/config/api";
 import { Tile } from "@/constants/tiles";
 
-type TextContent = {
-  type: "text";
-  text: string;
-};
-
-type ImageContent = {
-  type: "image_url";
-  image_url: {
-    url: string;
-  };
-};
-
 type Message = {
   role: "system" | "user" | "assistant";
-  content: string | (TextContent | ImageContent)[];
+  content: string;
 };
 
 async function chat(
@@ -96,104 +84,6 @@ Suggest 5 next words:`;
   } catch (error) {
     console.error("AI suggestion failed:", error);
     return [];
-  }
-}
-
-export async function interpretBoard(
-  tileLabels: string[],
-  boardDescription?: string,
-  drawingImageBase64?: string,
-  placedPhotoUris?: string[]
-): Promise<string[]> {
-  const systemPrompt = `You are an AAC message renderer. The child has already communicated with the words, drawings, and photos on the board. Return the child's message for the speech button to say.
-
-Rules:
-- Output only the message itself. Never explain, summarize, narrate, or say what "the child" wants.
-- Treat the written tile sequence in the user message as authoritative. Preserve its words and order; do not translate, paraphrase, correct, or replace it with a more natural English sentence.
-- Use a drawing or photo only to resolve what a visible symbol refers to. Do not add words or ideas that the board does not support.
-- If the board has only word tiles and no drawing or photo, repeat the tile sequence exactly as a single phrase.
-- If there is a drawing or photo, return at most three short message options, one per line. Each option must still be a message the child could say, never an explanation.
-- No headings, quotation marks, bullets, numbering, or extra commentary.
-
-Example: for "Word tiles (in reading order): I → want → hungry" with no drawing or photo, return exactly:
-I want hungry`;
-
-  // With tiles alone, return the child's exact sequence. This avoids asking a
-  // language model to paraphrase an already complete AAC message.
-  const tileSequence = boardDescription?.match(
-    /Word tiles \(in reading order\):\s*([^\n.]+)/i
-  )?.[1];
-  const hasVisualContext =
-    /Child's drawing present|photo\(s\) placed on board/i.test(boardDescription ?? '') ||
-    (placedPhotoUris?.length ?? 0) > 0;
-
-  if (tileSequence && !hasVisualContext) {
-    return [tileSequence.split('→').map((word) => word.trim()).filter(Boolean).join(' ')];
-  }
-
-  // Build message content - IMPORTANT: Include the actual images for vision
-  const messageContent: (TextContent | ImageContent)[] = [];
-
-  // Add the drawing image FIRST so the AI can actually see it
-  if (drawingImageBase64) {
-    // The image should now be PNG base64 from the canvas conversion
-    const imageUrl = drawingImageBase64.startsWith("data:")
-      ? drawingImageBase64
-      : `data:image/png;base64,${drawingImageBase64}`;
-
-    messageContent.push({
-      type: "image_url",
-      image_url: {
-        url: imageUrl,
-      },
-    });
-  }
-
-  // Add actual photo images so the AI can see what they depict
-  if (placedPhotoUris && placedPhotoUris.length > 0) {
-    for (const photoUri of placedPhotoUris) {
-      messageContent.push({
-        type: "image_url",
-        image_url: {
-          url: photoUri,
-        },
-      });
-    }
-  }
-
-  let textPrompt =
-    "Return only the message the child is communicating, ready for the speech button. Do not explain or paraphrase it.\n\n";
-
-  if (boardDescription) {
-    textPrompt += `Additional context:\n${boardDescription}\n\n`;
-  } else if (tileLabels.length > 0) {
-    textPrompt += `Word tiles visible: ${tileLabels.join(", ")}\n\n`;
-  }
-
-  textPrompt +=
-    "Use the tile sequence as the child's chosen words and preserve it in order. Refer to drawings or photos only when they clarify the message. Output only the message, not an explanation.";
-
-  messageContent.push({
-    type: "text",
-    text: textPrompt,
-  });
-
-  try {
-    const result = await chat([
-      { role: "system", content: systemPrompt },
-      { role: "user", content: messageContent },
-    ]);
-
-    return result
-      .split("\n")
-      .map((line) => line.replace(/^[\d\.\)\-\*\s]+/, "").trim())
-      .filter((line) => line.length > 0)
-      .slice(0, 3);
-  } catch (error) {
-    console.error("Board interpretation failed:", error);
-    return tileSequence
-      ? [tileSequence.split('→').map((word) => word.trim()).filter(Boolean).join(' ')]
-      : [];
   }
 }
 

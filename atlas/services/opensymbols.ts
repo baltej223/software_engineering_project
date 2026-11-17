@@ -16,10 +16,10 @@ async function loadCacheFromStorage(): Promise<void> {
   try {
     const stored = await AsyncStorage.getItem(SYMBOL_CACHE_KEY);
     if (stored) {
-      const parsed = JSON.parse(stored);
+      const parsed = JSON.parse(stored) as SymbolCacheData;
       // Filter out null values from cache - they may be from failed requests with old keys
       memoryCache = Object.fromEntries(
-        Object.entries(parsed).filter(([_, v]) => v !== null)
+        Object.entries(parsed).filter(([, value]) => value !== null)
       );
     }
   } catch (error) {

@@ -5,9 +5,18 @@ import {
 } from "@/components/InfiniteBoard";
 import { Platform } from "react-native";
 
+import { createDeferred } from "@/utils/deferred";
+
+const MAX_IMAGE_DIMENSION = 1024;
+const MIN_IMAGE_DIMENSION = 512;
+const JPEG_QUALITY = 0.82;
+
 /**
- * Convert board strokes and tiles to a base64-encoded PNG image for vision API
- * Gemini requires raster images (PNG/JPEG), not SVG
+ * Convert board strokes and tiles to a compact raster data URL for a vision API.
+ *
+ * The drawing is cropped to its content bounds, scaled to 512–1024 px on the
+ * long side, and encoded as JPEG on web. Native uses BoardSnapshot instead,
+ * because react-native-svg's toDataURL produces PNG.
  */
 export async function drawingToBase64Image(
   strokes: Stroke[],
@@ -15,93 +24,68 @@ export async function drawingToBase64Image(
   width: number = 800,
   height: number = 600
 ): Promise<string> {
-  // Generate SVG string
   const svgString = generateBoardSVG(strokes, placedTiles, width, height);
 
-  // On web, convert SVG to PNG using canvas
   if (Platform.OS === "web") {
-    try {
-      const pngDataUrl = await svgToPngDataUrl(svgString, width, height);
-      // Already contains the data:image/png;base64 prefix
-      return pngDataUrl;
-    } catch (error) {
-      console.error("Failed to convert SVG to PNG:", error);
-      // Fallback: return SVG (may not work with all vision APIs)
-      return createSvgDataUri(svgString);
-    }
+    return svgToJpegDataUrl(svgString);
   }
 
-  // On native platforms, return an SVG data URI so we don't mislabel it as PNG
-  // TODO: Use react-native-svg or expo-image-manipulator for native PNG conversion
-  return createSvgDataUri(svgString);
+  throw new Error(
+    "Native drawing capture must use BoardSnapshot.toDataURL(), not SVG."
+  );
 }
 
 /**
- * Convert SVG string to PNG base64 using canvas (web only)
+ * Convert an SVG string to a resized JPEG data URL using the web canvas.
  */
-async function svgToPngDataUrl(
-  svgString: string,
-  width: number,
-  height: number
-): Promise<string> {
-  return new Promise((resolve, reject) => {
-    // Create canvas first
-    const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext("2d");
+async function svgToJpegDataUrl(svgString: string): Promise<string> {
+  const { promise, resolve, reject } = createDeferred<string>();
+  const svgBase64 = btoa(unescape(encodeURIComponent(svgString)));
+  const dataUri = `data:image/svg+xml;base64,${svgBase64}`;
 
-    if (!ctx) {
-      reject(new Error("Could not get canvas context"));
-      return;
-    }
+  const img = new window.Image();
 
-    // Fill with white background first
-    ctx.fillStyle = "white";
-    ctx.fillRect(0, 0, width, height);
-
-    // Create a data URI from the SVG string (more reliable than blob)
-    const svgBase64 = btoa(unescape(encodeURIComponent(svgString)));
-    const dataUri = `data:image/svg+xml;base64,${svgBase64}`;
-
-    // Create an image element to load the SVG
-    const img = new window.Image();
-
-    img.onload = () => {
-      try {
-        // Draw the SVG image onto canvas
-        ctx.drawImage(img, 0, 0, width, height);
-
-        // Convert to PNG base64 with data URL prefix
-        const pngDataUrl = canvas.toDataURL("image/png");
-        resolve(pngDataUrl);
-      } catch (error) {
-        reject(error);
+  img.onload = () => {
+    try {
+      const naturalWidth = img.naturalWidth || img.width;
+      const naturalHeight = img.naturalHeight || img.height;
+      if (!naturalWidth || !naturalHeight) {
+        throw new Error("Drawing image has no dimensions");
       }
-    };
 
-    img.onerror = (error) => {
-      console.error("Failed to load SVG as image:", error);
-      reject(new Error("Failed to load SVG as image"));
-    };
+      const longestSide = Math.max(naturalWidth, naturalHeight);
+      const scale = Math.min(
+        MAX_IMAGE_DIMENSION / longestSide,
+        Math.max(1, MIN_IMAGE_DIMENSION / longestSide)
+      );
+      const targetWidth = Math.max(1, Math.round(naturalWidth * scale));
+      const targetHeight = Math.max(1, Math.round(naturalHeight * scale));
 
-    // Set crossOrigin to handle any CORS issues
-    img.crossOrigin = "anonymous";
-    img.src = dataUri;
-  });
-}
+      const canvas = document.createElement("canvas");
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        throw new Error("Could not get canvas context");
+      }
 
-/**
- * Convert SVG string to base64 (for simpler vision API integration)
- */
-export function svgToBase64(svgString: string): string {
-  return btoa(svgString);
-}
+      // Vision models handle a white background more reliably than alpha.
+      ctx.fillStyle = "white";
+      ctx.fillRect(0, 0, targetWidth, targetHeight);
+      ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
 
-/**
- * Helper to create SVG data URI from SVG string
- */
-export function createSvgDataUri(svgString: string): string {
-  const base64 = btoa(svgString);
-  return `data:image/svg+xml;base64,${base64}`;
+      resolve(canvas.toDataURL("image/jpeg", JPEG_QUALITY));
+    } catch (error) {
+      reject(error);
+    }
+  };
+
+  img.onerror = () => {
+    reject(new Error("Failed to load drawing SVG as an image"));
+  };
+
+  img.crossOrigin = "anonymous";
+  img.src = dataUri;
+
+  return promise;
 }

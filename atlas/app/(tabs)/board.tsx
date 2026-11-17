@@ -1,6 +1,6 @@
 import Text from '@/components/FontText';
 import * as ImagePicker from 'expo-image-picker';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { BoardSnapshot, BoardSnapshotHandle } from '@/components/BoardSnapshot';
 import PuzzlePiece from '@/components/PuzzlePiece';
 import { lightenColor } from '@/components/TileCard';
 
@@ -23,17 +24,22 @@ import {
   PlacedImage,
   PlacedTile,
   Stroke,
-  describeBoardContent,
 } from '@/components/InfiniteBoard';
 import { TileGrid } from '@/components/TileGrid';
 import Colors, { radius, shadows, spacing } from '@/constants/Colors';
 import { tabBarBottomOffset, tabBarHeight } from '@/constants/Layout';
 import { Tile } from '@/constants/tiles';
+import {
+  createBoardFingerprint,
+  getCachedBoardInterpretation,
+  interpretBoard,
+} from '@/services/boardInterpretation';
+import type { BoardInterpretationResult } from '@/services/boardInterpretation';
 import { speak } from '@/services/elevenlabs';
-import { interpretBoard } from '@/services/openrouter';
 import { searchSymbol } from '@/services/opensymbols';
 import { getBreadcrumbLabels, tilesMap, useAacStore, visibleTilesForPath } from '@/state/useAacStore';
 import { useSettingsStore } from '@/state/useSettingsStore';
+import { createDeferred } from '@/utils/deferred';
 import { drawingToBase64Image } from '@/utils/drawingToImage';
 import * as Speech from 'expo-speech';
 
@@ -120,45 +126,58 @@ const InterpretationWord = React.memo(({
   );
 });
 
-// Convert image URI to base64 data URI for the vision API
+function blobToDataUrl(blob: Blob): Promise<string> {
+  const { promise, resolve, reject } = createDeferred<string>();
+  const reader = new FileReader();
+  reader.onloadend = () => resolve(reader.result as string);
+  reader.onerror = () =>
+    reject(reader.error ?? new Error('Could not read image data'));
+  reader.readAsDataURL(blob);
+  return promise;
+}
+
+// Convert image URI to base64 data URI for the vision API.
+// Web photos are downscaled and JPEG-compressed; native picker output is
+// already compressed by ImagePicker's quality setting.
 async function imageUriToBase64(uri: string): Promise<string> {
-  // On web, if URI is already a data URI or blob URL, fetch and convert
-  if (Platform.OS === 'web') {
+  const response = await fetch(uri);
+  const blob = await response.blob();
+  const dataUrl = await blobToDataUrl(blob);
+
+  if (Platform.OS !== 'web') {
+    return dataUrl;
+  }
+
+  const { promise, resolve, reject } = createDeferred<string>();
+  const img = new window.Image();
+  img.onload = () => {
     try {
-      const response = await fetch(uri);
-      const blob = await response.blob();
-      return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const result = reader.result as string;
-          resolve(result); // Already includes data:image/...;base64, prefix
-        };
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
-      });
-    } catch (error) {
-      console.error('Failed to convert image to base64:', error);
-      throw error;
+      const maxDimension = 1024;
+      const longestSide = Math.max(img.naturalWidth, img.naturalHeight);
+      const scale = Math.min(1, maxDimension / longestSide);
+      const width = Math.max(1, Math.round(img.naturalWidth * scale));
+      const height = Math.max(1, Math.round(img.naturalHeight * scale));
+
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        resolve(dataUrl);
+        return;
+      }
+
+      ctx.fillStyle = 'white';
+      ctx.fillRect(0, 0, width, height);
+      ctx.drawImage(img, 0, 0, width, height);
+      resolve(canvas.toDataURL('image/jpeg', 0.8));
+    } catch {
+      resolve(dataUrl);
     }
-  }
-  
-  // On native, use fetch and blob API (modern approach)
-  try {
-    const response = await fetch(uri);
-    const blob = await response.blob();
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const result = reader.result as string;
-        resolve(result); // Already includes data:image/...;base64, prefix
-      };
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
-  } catch (error) {
-    console.error('Failed to read image as base64:', error);
-    throw error;
-  }
+  };
+  img.onerror = () => reject(new Error('Could not decode photo'));
+  img.src = dataUrl;
+  return promise;
 }
 
 export default function BoardScreen() {
@@ -190,7 +209,11 @@ export default function BoardScreen() {
 
   // UI state
   const [showPalette, setShowPalette] = useState(false);
-  const [interpretations, setInterpretations] = useState<string[]>([]);
+  const [interpretationResult, setInterpretationResult] =
+    useState<BoardInterpretationResult | null>(null);
+  const interpretations = interpretationResult?.interpretations ?? [];
+  const boardSnapshotRef = useRef<BoardSnapshotHandle>(null);
+  const boardFingerprintRef = useRef<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [interpretationWordImages, setInterpretationWordImages] = useState<Record<string, string | null>>({});
   const [interpretationWordTiles, setInterpretationWordTiles] = useState<Record<string, Tile>>({});
@@ -219,7 +242,12 @@ export default function BoardScreen() {
 
   // Always clear stale interpretations when the board content changes so Interpret reruns on latest state
   useEffect(() => {
-    setInterpretations([]);
+    boardFingerprintRef.current = createBoardFingerprint({
+      strokes,
+      placedTiles,
+      placedImages,
+    });
+    setInterpretationResult(null);
   }, [strokes, placedTiles, placedImages]);
 
   // Load image for tile popup
@@ -245,8 +273,8 @@ export default function BoardScreen() {
   useEffect(() => {
     const run = async () => {
       const wordSet = new Set<string>();
-      interpretations.forEach((sentence) => {
-        const cleaned = sentence.toLowerCase().replace(/[.,!?;:]/g, ' ');
+      interpretations.forEach((interpretation) => {
+        const cleaned = interpretation.phrase.toLowerCase().replace(/[.,!?;:]/g, ' ');
         cleaned.split(/\s+/).forEach((w) => { if (w.trim()) wordSet.add(w.trim()); });
       });
 
@@ -369,14 +397,14 @@ export default function BoardScreen() {
     };
     setPlacedTiles((prev) => [...prev, newTile]);
     setShowPalette(false);
-    setInterpretations([]);
+    setInterpretationResult(null);
   }, [width, height, openFolder, placedTiles, tileScales]);
 
   const handleClear = useCallback(() => {
     setStrokes([]);
     setPlacedTiles([]);
     setPlacedImages([]);
-    setInterpretations([]);
+    setInterpretationResult(null);
   }, []);
 
   const handleUndo = useCallback(() => {
@@ -406,7 +434,7 @@ export default function BoardScreen() {
           height: 150,
         }));
         setPlacedImages((current) => [...current, ...newImages]);
-        setInterpretations([]);
+        setInterpretationResult(null);
       }
     } catch (error) {
       Alert.alert('Error', 'Failed to open gallery');
@@ -432,7 +460,7 @@ export default function BoardScreen() {
           height: 150,
         };
         setPlacedImages((current) => [...current, newImage]);
-        setInterpretations([]);
+        setInterpretationResult(null);
       }
     } catch (error) {
       Alert.alert('Error', 'Failed to open camera');
@@ -445,32 +473,83 @@ export default function BoardScreen() {
       return;
     }
 
+    const tileLabels = [...placedTiles]
+      .sort((a, b) => (Math.abs(a.y - b.y) < 40 ? a.x - b.x : a.y - b.y))
+      .map((placed) => placed.tile.label);
+
+    // Tiles alone are already a complete message. Do not spend a model call
+    // paraphrasing words the child chose explicitly.
+    if (strokes.length === 0 && placedImages.length === 0) {
+      const phrase = tileLabels.join(' ');
+      setInterpretationResult(
+        phrase
+          ? {
+              interpretations: [
+                { phrase, concept: 'tiles', confidence: 1 },
+              ],
+              uncertain: false,
+            }
+          : null
+      );
+      return;
+    }
+
+    const fingerprint = createBoardFingerprint({
+      strokes,
+      placedTiles,
+      placedImages,
+    });
+    boardFingerprintRef.current = fingerprint;
+    const cached = getCachedBoardInterpretation(fingerprint);
+    if (cached) {
+      setInterpretationResult(cached);
+      return;
+    }
+
     setLoading(true);
     try {
-      const boardDescription = describeBoardContent(strokes, placedTiles, placedImages);
-      
-      // Convert drawing to base64 image for vision API
-      let drawingImageBase64: string | undefined;
-      if (strokes.length > 0 || placedTiles.length > 0) {
-        drawingImageBase64 = await drawingToBase64Image(strokes, placedTiles);
+      let drawingDataUrl: string | undefined;
+      if (strokes.length > 0) {
+        if (Platform.OS === 'web') {
+          drawingDataUrl = await drawingToBase64Image(strokes, []);
+        } else {
+          const snapshot = boardSnapshotRef.current;
+          if (!snapshot) {
+            throw new Error('Drawing snapshot is not ready. Please try again.');
+          }
+          drawingDataUrl = await snapshot.capture();
+        }
       }
-      
-      // Convert photo URIs to base64 data URIs so the AI can actually see them
-      const photoBase64Uris: string[] = [];
-      for (const img of placedImages) {
+
+      // Two photos is enough context for most boards; more mostly adds cost.
+      const photoDataUrls: string[] = [];
+      for (const img of placedImages.slice(-2)) {
         try {
-          const base64Uri = await imageUriToBase64(img.uri);
-          photoBase64Uris.push(base64Uri);
+          photoDataUrls.push(await imageUriToBase64(img.uri));
         } catch (error) {
           console.error('Failed to convert photo to base64:', error);
         }
       }
-      
-      const results = await interpretBoard([], boardDescription, drawingImageBase64, photoBase64Uris);
-      setInterpretations(results);
+
+      const result = await interpretBoard({
+        fingerprint,
+        drawingDataUrl,
+        photoDataUrls,
+        tileLabels,
+      });
+
+      // The child may have kept drawing while the request was in flight.
+      if (boardFingerprintRef.current !== fingerprint) {
+        return;
+      }
+      setInterpretationResult(result);
     } catch (error) {
       console.error('Interpretation failed:', error);
-      Alert.alert('Error', 'Could not interpret the board.');
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : 'Could not interpret the board. Please try again.';
+      Alert.alert('Could not interpret', message);
     } finally {
       setLoading(false);
     }
@@ -491,6 +570,10 @@ export default function BoardScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
+      {Platform.OS !== 'web' && (
+        <BoardSnapshot ref={boardSnapshotRef} strokes={strokes} />
+      )}
+
       {/* Main infinite canvas */}
       <InfiniteBoard
         strokes={strokes}
@@ -627,7 +710,7 @@ export default function BoardScreen() {
             ) : (
               <>
                 <IconImage iconKey="speak" fallback="🔊" cache={iconCache} onCache={handleIconCache} size={36} />
-                <Text style={styles.speakButtonText}>Speak</Text>
+                <Text style={styles.speakButtonText}>Interpret</Text>
               </>
             )}
           </Pressable>
@@ -718,23 +801,38 @@ export default function BoardScreen() {
 
       {/* Interpretations overlay - shows puzzle pieces below each text option */}
       <Modal
-        visible={interpretations.length > 0}
+        visible={
+          interpretationResult !== null &&
+          (interpretations.length > 0 || interpretationResult.uncertain)
+        }
         animationType="fade"
         transparent={true}
-        onRequestClose={() => setInterpretations([])}
+        onRequestClose={() => setInterpretationResult(null)}
       >
         <View style={styles.modalOverlay}>
           <ScrollView contentContainerStyle={styles.interpretationsScroll}>
             <View style={styles.interpretationsCard}>
               <View style={styles.interpretationsHeader}>
-                <Text style={styles.interpretationsTitle}>What you said</Text>
-                <Pressable onPress={() => setInterpretations([])}>
+                <Text style={styles.interpretationsTitle}>What you might mean</Text>
+                <Pressable onPress={() => setInterpretationResult(null)}>
                   <Text style={styles.closeButton}>✕</Text>
                 </Pressable>
               </View>
               
-              <Text style={styles.interpretationsHint}>Tap an option to speak</Text>
-              {interpretations.map((text, i) => {
+              <Text style={styles.interpretationsHint}>
+                Tap the phrase that fits. Nothing is spoken until you choose.
+              </Text>
+
+              {interpretationResult?.uncertain && (
+                <View style={styles.uncertainBanner}>
+                  <Text style={styles.uncertainText}>
+                    I'm not sure I understood. Try again or keep drawing.
+                  </Text>
+                </View>
+              )}
+
+              {interpretations.map((interpretation, i) => {
+                const text = interpretation.phrase;
                 // Clean the text and split into words
                 const cleanedText = text.toLowerCase().replace(/[.,!?;:]/g, '');
                 const words = cleanedText.split(/\s+/).filter(w => w.length > 0);
@@ -788,6 +886,28 @@ export default function BoardScreen() {
                   </Pressable>
                 );
               })}
+
+              <View style={styles.interpretationActions}>
+                <Pressable
+                  onPress={() => setInterpretationResult(null)}
+                  style={styles.notSureButton}
+                >
+                  <Text style={styles.notSureButtonText}>I'm not sure</Text>
+                </Pressable>
+                {interpretationResult?.uncertain && (
+                  <Pressable
+                    onPress={handleInterpret}
+                    disabled={loading}
+                    style={[styles.retryButton, loading && styles.disabledButton]}
+                  >
+                    {loading ? (
+                      <ActivityIndicator size="small" color={Colors.neutral[700]} />
+                    ) : (
+                      <Text style={styles.retryButtonText}>Try again</Text>
+                    )}
+                  </Pressable>
+                )}
+              </View>
             </View>
           </ScrollView>
         </View>
@@ -1008,6 +1128,54 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginBottom: spacing.xl,
     textAlign: 'center',
+  },
+  uncertainBanner: {
+    backgroundColor: Colors.accent.yellowSoft,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.warning,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    marginBottom: spacing.lg,
+  },
+  uncertainText: {
+    color: Colors.neutral[800],
+    fontSize: 15,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  interpretationActions: {
+    flexDirection: 'row',
+    gap: spacing.md,
+    marginTop: spacing.sm,
+  },
+  notSureButton: {
+    flex: 1,
+    backgroundColor: Colors.background.muted,
+    borderRadius: radius.xl,
+    paddingVertical: spacing.lg,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: Colors.neutral[300],
+  },
+  notSureButtonText: {
+    color: Colors.neutral[700],
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  retryButton: {
+    flex: 1,
+    backgroundColor: Colors.secondary.soft,
+    borderRadius: radius.xl,
+    paddingVertical: spacing.lg,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: Colors.secondary.base,
+  },
+  retryButtonText: {
+    color: Colors.secondary.dark,
+    fontSize: 16,
+    fontWeight: '700',
   },
   interpretationRow: {
     backgroundColor: Colors.secondary.soft,

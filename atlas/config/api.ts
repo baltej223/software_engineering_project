@@ -31,3 +31,14 @@ export const API_ENDPOINTS = {
   OPENSYMBOLS: "https://www.opensymbols.org/api/v2",
   ELEVENLABS: "https://api.elevenlabs.io/v1",
 };
+
+/**
+ * Vision model used for Board drawing interpretation. Keep this overridable
+ * so the model can be changed without touching the Board screen.
+ *
+ * Jev is intentionally not the default: it returns typed decisions, not AAC
+ * phrases, and its image input is still marked experimental by TypeSafe.
+ */
+export const BOARD_INTERPRETATION_MODEL =
+  process.env.EXPO_PUBLIC_BOARD_INTERPRETATION_MODEL ||
+  "google/gemini-3.1-flash-lite";

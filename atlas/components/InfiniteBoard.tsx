@@ -53,7 +53,7 @@ type InfiniteBoardProps = {
   drawOverlay?: boolean;  // When true, draw over tiles/images without selecting them
 };
 
-function pointsToPath(points: StrokePoint[]): string {
+export function pointsToPath(points: StrokePoint[]): string {
   if (points.length === 0) return '';
   if (points.length === 1) {
     return `M ${points[0].x} ${points[0].y} L ${points[0].x + 0.1} ${points[0].y}`;
@@ -602,7 +602,7 @@ export function describeBoardContent(
   return parts.join('. ');
 }
 
-function getStrokeBounds(stroke: Stroke) {
+export function getStrokeBounds(stroke: Stroke) {
   if (stroke.points.length === 0) return { x: 0, y: 0, width: 0, height: 0 };
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const p of stroke.points) {
@@ -614,18 +614,22 @@ function getStrokeBounds(stroke: Stroke) {
   return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
 }
 
-// Generate SVG string from strokes and tiles
-export function generateBoardSVG(
+/**
+ * Bounding box of the actual board content, with padding. Cropping to this
+ * keeps small drawings from being downscaled into a mostly empty image.
+ */
+export function getBoardContentBounds(
   strokes: Stroke[],
   placedTiles: PlacedTile[],
-  width: number = 800,
-  height: number = 600
-): string {
-  // Calculate bounds of all content
-  let minX = 0, minY = 0, maxX = width, maxY = height;
+  padding: number = 40,
+  fallbackWidth: number = 800,
+  fallbackHeight: number = 600
+) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
 
   for (const stroke of strokes) {
     const bounds = getStrokeBounds(stroke);
+    if (bounds.width === 0 && bounds.height === 0) continue;
     minX = Math.min(minX, bounds.x);
     minY = Math.min(minY, bounds.y);
     maxX = Math.max(maxX, bounds.x + bounds.width);
@@ -639,9 +643,27 @@ export function generateBoardSVG(
     maxY = Math.max(maxY, pt.y + 80);
   }
 
-  const padding = 40;
-  const contentWidth = maxX - minX + padding * 2;
-  const contentHeight = maxY - minY + padding * 2;
+  if (!Number.isFinite(minX) || !Number.isFinite(minY)) {
+    return { x: 0, y: 0, width: fallbackWidth, height: fallbackHeight };
+  }
+
+  return {
+    x: minX - padding,
+    y: minY - padding,
+    width: Math.max(1, maxX - minX + padding * 2),
+    height: Math.max(1, maxY - minY + padding * 2),
+  };
+}
+
+// Generate SVG string from strokes and tiles
+export function generateBoardSVG(
+  strokes: Stroke[],
+  placedTiles: PlacedTile[],
+  width: number = 800,
+  height: number = 600
+): string {
+  const bounds = getBoardContentBounds(strokes, placedTiles, 40, width, height);
+  const { x: minX, y: minY, width: contentWidth, height: contentHeight } = bounds;
 
   let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${contentWidth}" height="${contentHeight}" viewBox="0 0 ${contentWidth} ${contentHeight}">`;
   svg += `<rect width="${contentWidth}" height="${contentHeight}" fill="white"/>`;
@@ -649,16 +671,16 @@ export function generateBoardSVG(
   // Draw strokes
   for (const stroke of strokes) {
     const path = pointsToPath(stroke.points.map(p => ({
-      x: p.x - minX + padding,
-      y: p.y - minY + padding
+      x: p.x - minX,
+      y: p.y - minY
     })));
     svg += `<path d="${path}" stroke="${stroke.color}" stroke-width="${stroke.width}" stroke-linecap="round" stroke-linejoin="round" fill="none"/>`;
   }
 
   // Draw tiles as rectangles with text
   for (const pt of placedTiles) {
-    const x = pt.x - minX + padding;
-    const y = pt.y - minY + padding;
+    const x = pt.x - minX;
+    const y = pt.y - minY;
     svg += `<rect x="${x}" y="${y}" width="80" height="80" rx="12" fill="${pt.tile.color}" stroke="#0f172a" stroke-width="2"/>`;
     // Add tile label text
     svg += `<text x="${x + 40}" y="${y + 45}" text-anchor="middle" font-family="Calibri" font-size="12" font-weight="bold" fill="#0f172a">${pt.tile.label}</text>`;

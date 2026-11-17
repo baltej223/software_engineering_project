@@ -1,0 +1,32 @@
+[
+  {
+    "file": "glass-water.png",
+    "expectedObject": "water",
+    "acceptablePhrases": ["I want water", "I am thirsty", "Can I have water?"]
+  },
+  {
+    "file": "sun.png",
+    "expectedObject": "sun",
+    "acceptablePhrases": ["I want outside", "It is sunny", "I want to play outside"]
+  },
+  {
+    "file": "house.png",
+    "expectedObject": "house",
+    "acceptablePhrases": ["I want home", "I want to go home", "I am going home"]
+  },
+  {
+    "file": "food.png",
+    "expectedObject": "food",
+    "acceptablePhrases": ["I want food", "I am hungry", "Can I have food?"]
+  },
+  {
+    "file": "person.png",
+    "expectedObject": "person",
+    "acceptablePhrases": ["I want a friend", "I want to see someone", "I am here"]
+  },
+  {
+    "file": "ambiguous.png",
+    "expectedObject": "ambiguous",
+    "acceptablePhrases": []
+  }
+]
