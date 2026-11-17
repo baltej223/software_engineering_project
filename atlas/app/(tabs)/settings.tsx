@@ -10,6 +10,8 @@ import { Picker } from '@react-native-picker/picker';
 import { translateTiles } from '@/utils/translation';
 import { initialTiles } from '@/constants/tiles';
 import { useAacStore } from '@/state/useAacStore';
+import { useAuth } from '@/state/AuthProvider';
+import { signOut } from '@/services/firebase';
 
 const translations = {
   en: {
@@ -47,6 +49,8 @@ export default function SettingsScreen() {
     setTranslatedTiles,
   } = useSettingsStore();
   const [translating, setTranslating] = useState(false);
+  const { user } = useAuth();
+  const [signingOut, setSigningOut] = useState(false);
 
   const t = translations[selectedLanguage as 'en' | 'hi'] || translations.en;
 
@@ -79,6 +83,35 @@ export default function SettingsScreen() {
     <View style={styles.container}>
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
         <Text weight="bold" style={styles.header}>{t.settings}</Text>
+
+        <View style={styles.settingCard}>
+          <View style={styles.settingRow}>
+            <View style={styles.settingInfo}>
+              <MaterialCommunityIcons name="account-circle" size={28} color={Colors.primary.base} />
+              <View style={styles.settingText}>
+                <Text weight="semibold" style={styles.settingTitle}>{user?.displayName || 'Signed in'}</Text>
+                <Text style={styles.settingDescription}>{user?.email}</Text>
+              </View>
+            </View>
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Sign out"
+              disabled={signingOut}
+              onPress={async () => {
+                setSigningOut(true);
+                try {
+                  await signOut();
+                } catch (error) {
+                  console.error('Sign out failed:', error);
+                } finally {
+                  setSigningOut(false);
+                }
+              }}
+            >
+              <Text weight="semibold" style={{ color: Colors.primary.base }}>{signingOut ? 'Signing out…' : 'Sign out'}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
 
         {/* Emotion Feature Setting */}
         <View style={styles.settingCard}>

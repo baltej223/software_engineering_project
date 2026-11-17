@@ -20,7 +20,7 @@ type Message = {
 
 async function chat(
   messages: Message[],
-  model = "google/gemini-2.0-flash-001"
+  model = "dots-studio/dots-3-note-preview:free"
 ): Promise<string> {
   if (!API_KEYS.OPENROUTER || API_KEYS.OPENROUTER.length < 20) {
     console.error(
@@ -105,35 +105,31 @@ export async function interpretBoard(
   drawingImageBase64?: string,
   placedPhotoUris?: string[]
 ): Promise<string[]> {
-  const systemPrompt = `You are an AAC (Augmentative and Alternative Communication) interpreter for children.
+  const systemPrompt = `You are an AAC message renderer. The child has already communicated with the words, drawings, and photos on the board. Return the child's message for the speech button to say.
 
-You will receive an IMAGE of a communication board containing:
-- Hand-drawn pictures by a child (simple, sketch-like drawings)
-- Word tiles with labels placed on the board
-- Photos the user has added
-- Arrows or lines connecting elements
+Rules:
+- Output only the message itself. Never explain, summarize, narrate, or say what "the child" wants.
+- Treat the written tile sequence in the user message as authoritative. Preserve its words and order; do not translate, paraphrase, correct, or replace it with a more natural English sentence.
+- Use a drawing or photo only to resolve what a visible symbol refers to. Do not add words or ideas that the board does not support.
+- If the board has only word tiles and no drawing or photo, repeat the tile sequence exactly as a single phrase.
+- If there is a drawing or photo, return at most three short message options, one per line. Each option must still be a message the child could say, never an explanation.
+- No headings, quotation marks, bullets, numbering, or extra commentary.
 
-Your task: LOOK AT THE IMAGE and interpret what the child is trying to communicate.
+Example: for "Word tiles (in reading order): I → want → hungry" with no drawing or photo, return exactly:
+I want hungry`;
 
-Critical guidelines for interpreting children's drawings:
-- Children draw simple shapes: a triangle on a rectangle = house, circle with lines = sun, stick figures = people
-- A face with a smile = happy/friend, circle with dots = face/person
-- Simple rectangles with triangle roof = house/home
-- Wavy lines = water, vertical lines = rain, curved lines = hills
-- Scribbles near objects may indicate action or emphasis
-- Arrows show relationships or direction of action
-- Word tiles placed NEAR drawings modify or describe them
-- Read left-to-right, top-to-bottom for sentence order
+  // With tiles alone, return the child's exact sequence. This avoids asking a
+  // language model to paraphrase an already complete AAC message.
+  const tileSequence = boardDescription?.match(
+    /Word tiles \(in reading order\):\s*([^\n.]+)/i
+  )?.[1];
+  const hasVisualContext =
+    /Child's drawing present|photo\(s\) placed on board/i.test(boardDescription ?? '') ||
+    (placedPhotoUris?.length ?? 0) > 0;
 
-Focus on common AAC needs:
-- Requests: "I want...", "Can I have...", "I need..."
-- Feelings: "I feel...", "I am..."
-- Places: "I want to go to..."
-- People: "I want to see..."
-- Activities: "I want to play/read/eat..."
-
-Output 1-3 short interpretations (5-10 words each), one per line, no numbering or bullets.
-Be generous in interpretation - guess what the child means even from rough sketches.`;
+  if (tileSequence && !hasVisualContext) {
+    return [tileSequence.split('→').map((word) => word.trim()).filter(Boolean).join(' ')];
+  }
 
   // Build message content - IMPORTANT: Include the actual images for vision
   const messageContent: (TextContent | ImageContent)[] = [];
@@ -166,7 +162,7 @@ Be generous in interpretation - guess what the child means even from rough sketc
   }
 
   let textPrompt =
-    "Look at the images above and interpret what the child is trying to communicate.\n\n";
+    "Return only the message the child is communicating, ready for the speech button. Do not explain or paraphrase it.\n\n";
 
   if (boardDescription) {
     textPrompt += `Additional context:\n${boardDescription}\n\n`;
@@ -175,7 +171,7 @@ Be generous in interpretation - guess what the child means even from rough sketc
   }
 
   textPrompt +=
-    "What is the child trying to say? Interpret the drawings, photos, and tiles as a message.";
+    "Use the tile sequence as the child's chosen words and preserve it in order. Refer to drawings or photos only when they clarify the message. Output only the message, not an explanation.";
 
   messageContent.push({
     type: "text",
@@ -191,11 +187,13 @@ Be generous in interpretation - guess what the child means even from rough sketc
     return result
       .split("\n")
       .map((line) => line.replace(/^[\d\.\)\-\*\s]+/, "").trim())
-      .filter((line) => line.length > 5)
+      .filter((line) => line.length > 0)
       .slice(0, 3);
   } catch (error) {
     console.error("Board interpretation failed:", error);
-    return ["I want to say something"];
+    return tileSequence
+      ? [tileSequence.split('→').map((word) => word.trim()).filter(Boolean).join(' ')]
+      : [];
   }
 }
 
