@@ -1,453 +1,294 @@
-# Atlas Personalization Engine - Technical Architecture
-## Algorithms, Systems & Functioning Explained
+# Atlas
+
+**A tile-based AAC (Augmentative and Alternative Communication) prototype with AI-assisted phrase building, drawing-to-speech, and expressive voice.**
+
+Atlas helps non-speaking and minimally speaking users build sentences from symbol tiles, sketch or photograph what they mean, and have it spoken aloud with emotion. It also turns spoken conversation around the user into simple tiles they can respond with.
+
+> ⚠️ **Prototype status.** Atlas is not a clinically validated AAC device. AI suggestions are assistive prompts, not guaranteed interpretations of a user's intent. Nothing is ever auto-spoken from an AI guess; the user always chooses.
+
+![Expo](https://img.shields.io/badge/Expo-SDK%2054-000020?logo=expo)
+![React Native](https://img.shields.io/badge/React%20Native-0.81-61DAFB?logo=react&logoColor=black)
+![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)
+![Status](https://img.shields.io/badge/status-prototype-orange)
 
 ---
 
-## 1. CORE PERSONALIZATION FRAMEWORK
+## Table of contents
 
-### **Collaborative Filtering Algorithm**
-**What it does:** Analyzes patterns from similar users to predict what symbols a child might need next.
-
-**How it works:**
-- Tracks which symbols children of similar age, language, and ability level use most frequently
-- Identifies usage patterns across time, location, and context
-- Recommends symbols based on "children like you also used these symbols in similar situations"
-- Continuously refines recommendations as the child's usage patterns evolve
-
-**Example:** If 1000 Hindi-speaking 8-year-olds with similar communication levels frequently use "खेलना चाहता हूँ" (want to play) after school hours, Atlas suggests this to Aarav at 3 PM when he's at home.
-
----
-
-### **Markov Chain Prediction Model**
-**What it does:** Predicts the next most likely symbol based on the sequence of previously selected symbols.
-
-**How it works:**
-- Builds probability matrices of symbol sequences
-- Tracks transition probabilities (if user selects "I want" → 80% probability next symbol is food/activity category)
-- Creates personalized chains based on individual usage history
-- Updates probabilities with each interaction
-
-**Example:** When Priya selects "मैं" (I) followed by "चाहिए" (want), the system knows from her history that she follows this with "पानी" (water) 60% of the time, "खाना" (food) 30% of the time—so it prioritizes these in suggestions.
+- [Features](#features)
+- [How it works](#how-it-works)
+- [Tech stack](#tech-stack)
+- [Getting started](#getting-started)
+- [Configuration](#configuration)
+- [Platform support](#platform-support)
+- [Project structure](#project-structure)
+- [Data, persistence and privacy](#data-persistence-and-privacy)
+- [Current limitations](#current-limitations)
+- [Roadmap](#roadmap)
 
 ---
 
-## 2. CONTEXT DETECTION SYSTEMS
+## Features
 
-### **Temporal Pattern Recognition**
-**What it does:** Identifies time-based usage patterns and contextual needs.
+### 🗣️ Speak: sentence builder
 
-**How it works:**
-- **Circadian Rhythm Analysis:** Maps symbol usage to biological rhythms (morning = bathroom, breakfast; evening = tired, dinner)
-- **Day-of-Week Patterns:** Recognizes weekday school vocabulary vs. weekend family vocabulary
-- **Seasonal Adaptation:** Adjusts for Indian seasons (summer = too hot, water, AC; monsoon = wet, rain, umbrella)
-- **Festival Calendar Integration:** Automatically loads festival-specific vocabulary 3 days before major holidays
+- 64 core tiles plus **1,012 general words** in folders, lazy-loaded by letter bucket (`A–M`, `N–Z`), so startup stays fast.
+- Tap a tile to hear it instantly (native `expo-speech`) and add it to the sentence bar.
+- **Next-word suggestions** from an LLM, with a deterministic fallback (sibling tiles + `please`, `help`, `more`, `stop`, `yes`, `no`, `go`, `want`) when offline or on failure.
+- Full-sentence **expressive speech** via ElevenLabs (`eleven_v3`) with an emotion audio tag.
 
-**Example:** During Diwali week, the system automatically elevates "दीया" (diya), "पटाखे" (crackers), "मिठाई" (sweets) to top suggestions without manual input.
+### 🎨 Board: draw, place, interpret
 
----
+- Pannable canvas with **draw, erase, select, and pan** modes.
+- Place AAC tiles and photos (gallery or camera); move and resize them; undo and clear.
+- Tap **Interpret** to get a few candidate phrases ("What you might mean"):
+  - **Tiles only** → a cheap text model expands telegraphic input (`I → water` becomes "I want water"). No image is captured or uploaded.
+  - **Drawings / photos** → a vision model returns phrases with confidence scores.
+- Low confidence shows "I'm not sure" with **Try again**. Results are **never auto-spoken**; the user taps a phrase to speak it.
 
-### **Geospatial Context Mapping**
-**What it does:** Uses location intelligence to predict communication needs based on where the child is.
+### 👂 Listen: speech to tiles
 
-**How it works:**
-- **GPS Clustering Algorithm:** Identifies frequently visited locations and categorizes them (home, school, grandparents, therapy center, temple/mosque/church)
-- **Geofencing Technology:** Creates virtual boundaries around significant locations
-- **Location-Vocabulary Mapping:** Associates specific symbol sets with each location
-- **Transition Detection:** Recognizes movement between locations and adjusts vocabulary accordingly
+- Microphone input is transcribed in the browser, simplified into available tiles, and paired with suggested replies.
+- Conversations are saved locally as text (up to 50).
 
-**Example:** When Aarav's GPS shows he's entered his school geofence, the system switches from home vocabulary (मम्मी, पापा, खिलौना) to school vocabulary (शिक्षक, कक्षा, दोस्त, पानी, बाथरूम).
+### 🙂 Emotion-aware speech
 
----
+- Optional camera-based emotion detection (`face-api.js`, ~3 FPS, smoothed) feeds the TTS emotion tag.
+- Without the camera, emotion is classified from the sentence text (`neutral`, `happy`, `sad`, `excited`, `angry`, `calm`, `curious`, `thoughtful`).
 
-### **Proximity Detection via Bluetooth Low Energy (BLE)**
-**What it does:** Identifies who is near the child to adjust communication style and vocabulary.
+### 🌐 More
 
-**How it works:**
-- **Device Fingerprinting:** Learns Bluetooth signatures of family members' phones/devices
-- **Social Graph Mapping:** Builds relationship map (mother, father, siblings, teacher, therapist)
-- **Role-Based Vocabulary Adjustment:** Different symbol sets for different relationships
-- **Distance Estimation:** Closer proximity = more intimate vocabulary; farther = formal
-
-**Example:** When teacher's tablet is detected nearby, Atlas prioritizes academic and need-based vocabulary. When mother's phone is close, it offers more emotional and personal vocabulary like "गले लगाओ" (hug me), "प्यार करती हो?" (do you love me?).
+- Google sign-in via Firebase with protected routes.
+- OpenSymbols symbol lookup with local caching.
+- English → Hindi tile translation (requires a local service; see [Limitations](#current-limitations)).
 
 ---
 
-### **Computer Vision - Facial Expression Recognition**
-**What it does:** Real-time emotion detection through front-facing camera analysis.
+## How it works
 
-**How it works:**
-- **Convolutional Neural Networks (CNN):** Specifically trained facial emotion recognition models (FER+, AffectNet)
-- **Facial Action Coding System (FACS):** Detects micro-expressions by analyzing facial muscle movements
-- **Multi-Frame Analysis:** Samples expressions 4 times per second (every 250ms) to detect emotional trends
-- **Emotion Classification:** Categorizes into 7 primary emotions (happy, sad, angry, frustrated, surprised, neutral, anxious)
-- **Adaptive UI Response:** Modifies interface complexity, suggestion speed, and vocabulary difficulty based on emotional state
+```mermaid
+flowchart LR
+    subgraph Client["Atlas client (Expo / React Native / Web)"]
+        Speak[Speak]
+        Board[Board]
+        Listen[Listen]
+    end
 
-**Example:** When camera detects Priya's frustrated expression (furrowed brows, tight lips) lasting >10 seconds, the system:
-- Simplifies vocabulary to most frequently used symbols
-- Increases button size for easier selection
-- Slows suggestion rotation speed
-- Offers pre-built phrases like "मुझे मदद चाहिए" (I need help)
+    Speak -->|sentence text| OR[(OpenRouter)]
+    Board -->|tiles / drawing / photos| OR
+    Listen -->|transcript| OR
+    Speak -->|sentence + emotion tag| EL[(ElevenLabs TTS)]
+    Board -->|chosen phrase| EL
+    Client --> OS[(OpenSymbols)]
+    Client --> FB[(Firebase Auth)]
+    Client --> FA[face-api.js via jsDelivr]
+    Client -.->|optional| TR[localhost:8244 translation]
+```
 
----
+**Speak**
+`tiles → sentence → local/AI suggestions → ElevenLabs speech`
 
-## 3. ARTIFICIAL INTELLIGENCE LAYER
+**Board**
+`tiles only → cheap text model → phrase choices`
+`drawing/photos → vision model → phrase choices`
+→ user selects → ElevenLabs speaks
 
-### **Natural Language Processing (NLP) - Sentence Construction**
-**What it does:** Converts symbol selections into grammatically correct sentences in Indian languages.
+**Listen**
+`microphone → Web Speech API → transcript → OpenRouter → AAC tiles + reply suggestions → saved text conversation`
 
-**How it works:**
-- **Morphological Analysis:** Adjusts word forms for gender, number, case (critical for Hindi/Tamil/Bengali grammar)
-- **Syntax Trees:** Builds proper sentence structure following language-specific grammar rules
-- **Contextual Grammar Engine:** Applies appropriate verb conjugations, postpositions, honorifics
-- **Multi-Language Grammar Models:** Separate rule engines for each of 22 scheduled languages
+### Board interpretation details
 
-**Example:** When user selects symbols [मैं] [जाना] [दादी] [घर]:
-- System detects Hindi language setting
-- Applies proper postposition: "दादी के घर"
-- Adds proper verb form: "मैं दादी के घर जाना चाहता/चाहती हूँ" (gender-adaptive)
-- Generates correct pronunciation for text-to-speech
-
----
-
-### **Large Language Model (LLM) Integration - Gemini API**
-**What it does:** Provides advanced contextual understanding and generates sophisticated phrase suggestions.
-
-**How it works:**
-- **Contextual Prompting:** Sends current context (time, location, emotion, recent symbols) to Gemini
-- **Few-Shot Learning:** Provides examples of the child's communication style to maintain consistency
-- **Constrained Generation:** Limits outputs to age-appropriate, culturally relevant suggestions
-- **Confidence Scoring:** Ranks AI-generated suggestions by relevance probability
-- **Hybrid Decision Making:** Combines AI suggestions with local ML predictions
-
-**Example:** Context sent to AI: "8-year-old, at park, happy emotion, just selected [खेलना] [चाहिए]. Generate next 5 likely symbols."
-AI returns: [झूला, फिसलपट्टी, दोस्त के साथ, पानी पीना, और खेलना] (swing, slide, with friend, drink water, play more)
+- Drawings are cropped to content bounds; web sends JPEG (512–1024 px), native sends PNG; at most **2 photos** are sent.
+- Results are cached by a fingerprint of strokes, tiles, and images (in-memory, max 20). **Uncertain results are not cached**, so _Try again_ re-queries.
+- Identical in-flight requests are de-duplicated, and stale responses are discarded if the board changed while waiting.
+- If the tile-only model call fails, the exact tile sequence is shown with `uncertain: true`.
 
 ---
 
-### **Reinforcement Learning with Human Feedback (RLHF)**
-**What it does:** Improves prediction accuracy by learning from user choices and corrections.
+## Tech stack
 
-**How it works:**
-- **Reward Modeling:** Positive reinforcement when predicted symbols are selected; negative when ignored
-- **Q-Learning Algorithm:** Calculates optimal symbol suggestion strategy over time
-- **Exploration vs Exploitation:** Balances showing familiar symbols vs introducing new vocabulary
-- **Policy Gradient Methods:** Adjusts suggestion weights based on cumulative success rates
-- **Continuous Optimization:** Model updates every 1000 interactions per user
+| Area              | Implementation                                         |
+| ----------------- | ------------------------------------------------------ |
+| App framework     | Expo SDK 54, React Native 0.81, React 19               |
+| Routing           | Expo Router (file-based)                               |
+| Language          | TypeScript (`strict: true`)                            |
+| Client state      | Zustand (in memory)                                    |
+| Auth              | Firebase Authentication with Google                    |
+| Local persistence | AsyncStorage                                           |
+| Drawing           | `react-native-svg`                                     |
+| Camera / photos   | `expo-image-picker`                                    |
+| Speech output     | ElevenLabs (`eleven_v3`) and `expo-speech`             |
+| Speech input      | Browser Web Speech API                                 |
+| Emotion detection | `face-api.js` (browser or WebView)                     |
+| Symbols           | OpenSymbols API                                        |
+| AI                | OpenRouter chat and vision models                      |
+| Translation       | Local HTTP service (`http://localhost:8244/translate`) |
 
-**Example:** System suggests 6 symbols; user selects #3. Over time, RLHF learns to place the most likely symbol in position #1, reducing search time from 8 seconds to 3 seconds.
-
----
-
-## 4. ADAPTIVE LEARNING SYSTEMS
-
-### **Spaced Repetition Algorithm (SRS)**
-**What it does:** Introduces new vocabulary at optimal intervals based on memory science.
-
-**How it works:**
-- **Ebbinghaus Forgetting Curve:** Calculates when a symbol is likely to be forgotten
-- **Leitner System Adaptation:** Promotes mastered symbols to longer intervals; demotes struggling symbols to frequent review
-- **Difficulty Scaling:** Assigns complexity scores to symbols (basic needs = 1; abstract concepts = 10)
-- **Personalized Learning Curve:** Adjusts pace based on age, cognitive ability, and performance metrics
-
-**Example:** 
-- Day 1: Introduce "पानी" (water)
-- Day 2: Show again (reinforcement)
-- Day 4: Show again
-- Day 7: Show again
-- Day 14: If mastered, show only when contextually relevant
-- Day 30: If forgotten, restart cycle
+There is **no application backend** in this repository. The client calls external APIs directly.
 
 ---
 
-### **Zone of Proximal Development (ZPD) Detection**
-**What it does:** Identifies when a child is ready to move from current ability to next complexity level.
+## Getting started
 
-**How it works:**
-- **Performance Metrics Analysis:** Tracks selection speed, error rate, session duration, frustration indicators
-- **Mastery Threshold:** Requires 80% confident usage of current vocabulary before expansion
-- **Scaffolding Algorithm:** Gradually removes support as competency increases
-- **Regression Detection:** Identifies declining performance and simplifies temporarily
+### Prerequisites
 
-**Example:** Aarav masters 200 core symbols (used confidently for 2 weeks). System detects:
-- Selection speed improved 40%
-- Error rate dropped to <5%
-- Session duration increased (engagement up)
-- Parent feedback positive
-→ Algorithm introduces next 50 symbols in "feelings" category
+- Node.js and either [Bun](https://bun.sh) or npm
+- API keys for OpenRouter, ElevenLabs, and OpenSymbols (see [Configuration](#configuration))
+- A Google OAuth web client ID for native sign-in
+- For native Google sign-in: a **development/native build** (it does not work in Expo Go)
 
----
+### Install and run
 
-### **Bayesian Knowledge Tracing**
-**What it does:** Probabilistically models what the child knows and doesn't know to personalize difficulty.
+```sh
+cd atlas
 
-**How it works:**
-- **Knowledge State Estimation:** Calculates probability that user has mastered each symbol (0-100%)
-- **Evidence Updating:** Each interaction updates probability (Bayes' theorem)
-- **Slip & Guess Parameters:** Accounts for accidental correct/incorrect selections
-- **Learning Rate Calculation:** Estimates how quickly child acquires new vocabulary
-- **Confidence Intervals:** Provides uncertainty estimates for system suggestions
+# The checked-in package-lock.json is out of sync with package.json,
+# so prefer the Bun lockfile:
+bun install --frozen-lockfile
+# or: npm install
 
-**Example:** Symbol "खुश" (happy):
-- Initial probability of mastery: 20%
-- User selects correctly 3 times → probability updates to 75%
-- User selects correctly in varied contexts → probability reaches 95%
-- System now assumes mastery and introduces related concepts (बहुत खुश, थोड़ा खुश)
+cp .env.example .env.local
+# fill in real values
+
+npm run web       # web target (best-supported)
+npm run start     # Expo / Metro
+npm run android   # native Android build
+npm run ios       # native iOS build
+```
+
+> There are currently no `test`, `lint`, or `typecheck` scripts in `package.json`.
 
 ---
 
-## 5. CULTURAL & LINGUISTIC INTELLIGENCE
+## Configuration
 
-### **Code-Switching Detection & Support**
-**What it does:** Recognizes when users mix languages (common in Indian communication) and supports seamless switching.
+Copy `atlas/.env.example` to `atlas/.env.local` and fill in:
 
-**How it works:**
-- **Language Identification Models:** Detects which language symbol belongs to
-- **Multi-Script Support:** Handles Devanagari, Tamil, Bengali, Gurmukhi, etc. simultaneously
-- **Hinglish/Tanglish Recognition:** Understands hybrid language patterns common in Indian speech
-- **Grammar Reconciliation:** Maintains grammatical correctness when mixing languages
+| Variable                                 | Required                | Purpose                                                                     |
+| ---------------------------------------- | ----------------------- | --------------------------------------------------------------------------- |
+| `EXPO_PUBLIC_OPENROUTER_API_KEY`         | Yes, for AI             | Suggestions, transcript mapping, replies, emotion, board vision             |
+| `EXPO_PUBLIC_OPENSYMBOLS_SECRET`         | Yes, for symbols        | OpenSymbols access token                                                    |
+| `EXPO_PUBLIC_ELEVENLABS_API_KEY`         | Yes, for expressive TTS | ElevenLabs speech                                                           |
+| `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`       | Native Google sign-in   | OAuth web client ID                                                         |
+| `EXPO_PUBLIC_BOARD_INTERPRETATION_MODEL` | Optional                | Overrides the vision model (default `google/gemini-3.1-flash-lite`)         |
+| `EXPO_PUBLIC_TILE_INTERPRETATION_MODEL`  | Optional                | Overrides the tile-only text model (default `google/gemini-2.5-flash-lite`) |
+| `OPENROUTER_API_KEY`                     | Eval script only        | Used by `scripts/evaluate-board-drawing.mjs`; not bundled                   |
 
-**Example:** User constructs: [मैं] [want] [जाना] [park] → System outputs: "मैं park जाना चाहता हूँ" (natural code-switched sentence common in Indian English)
+Firebase web config is **hardcoded** in `atlas/services/firebase.ts`; it is not read from environment variables.
 
----
-
-### **Regional Dialect & Vocabulary Adaptation**
-**What it does:** Adjusts vocabulary to match regional linguistic variations within same language.
-
-**How it works:**
-- **Dialect Classification:** Identifies regional variant (Awadhi Hindi vs Haryanvi Hindi vs Bhojpuri)
-- **Local Term Database:** 50,000+ region-specific vocabulary entries
-- **Cultural Context Library:** Regional food, festivals, relationship terms, local customs
-- **Pronunciation Variation Models:** TTS adapts accent to regional norms
-
-**Example:** 
-- In Tamil Nadu: "பாட்டி" (grandmother) suggested
-- In Andhra Pradesh: "అమ్మమ్మ" suggested for same concept
-- In Kerala: "മുത്തശി" suggested
-- All for the same "grandmother" symbol, adapted to user's registered region
+The default chat model for suggestions is `dots-studio/dots-3-note-preview:free` (set in `services/openrouter.ts`).
 
 ---
 
-### **Festival & Cultural Event Awareness System**
-**What it does:** Automatically loads culturally relevant vocabulary based on Indian calendar.
+## Platform support
 
-**How it works:**
-- **Multi-Calendar Integration:** Hindu, Islamic, Christian, Sikh, Buddhist calendars
-- **Regional Festival Database:** 200+ festivals across India with associated vocabulary
-- **Predictive Loading:** Activates festival vocabulary 3 days before, maintains 2 days after
-- **Cultural Sensitivity Algorithm:** Respects religious diversity in suggestions
+| Feature               | Web (Chrome / Edge) |        Safari        | Firefox |       iOS / Android native        |
+| --------------------- | :-----------------: | :------------------: | :-----: | :-------------------------------: |
+| Speak (tiles, TTS)    |         ✅          |          ✅          |   ✅    |                ✅                 |
+| Board                 |         ✅          |          ✅          |   ✅    |                ✅                 |
+| Listen (speech input) |         ✅          | ⚠️ version-dependent |   ❌    | ❌ ("New Transcription" disabled) |
+| Camera emotion        |         ✅          |          ✅          |   ✅    |          ✅ via WebView           |
+| Google sign-in        |        Popup        |        Popup         |  Popup  |        Dev build required         |
 
-**Example:** System detects:
-- User location: Punjab
-- User religion preference: Sikh
-- Upcoming event: Guru Nanak Jayanti
-→ Automatically suggests: [गुरुद्वारा, लंगर, कीर्तन, प्रसाद, वाहेगुरु]
+Listen is effectively **web-only** today because it relies on `SpeechRecognition` / `webkitSpeechRecognition`.
 
 ---
 
-## 6. MULTIMODAL INPUT PROCESSING
+## Project structure
 
-### **Computer Vision - Sketch Recognition (Draw-to-Communicate)**
-**What it does:** Converts hand-drawn sketches into AAC symbols and spoken language.
-
-**How it works:**
-- **Convolutional Neural Networks (CNN) - Sketch Classification:** Trained on Google's Quick Draw dataset + custom Indian object dataset
-- **Stroke Analysis:** Analyzes drawing patterns, speed, pressure to understand intent
-- **Object Recognition:** Identifies drawn objects with 85%+ accuracy
-- **Semantic Mapping:** Matches sketch to closest symbol in vocabulary library
-- **Ambiguity Resolution:** Offers top 3 interpretations when confidence <90%
-
-**Example:** Child draws a circle with rays (crude sun) → System recognizes:
-- Option 1: "सूरज" (sun) - 78% confidence
-- Option 2: "गरम" (hot) - 62% confidence  
-- Option 3: "बाहर" (outside) - 45% confidence
-User selects desired interpretation, system learns for future
-
----
-
-### **Automatic Speech Recognition (ASR) - Speech-to-Tiles**
-**What it does:** Converts spoken language from caregivers/teachers into AAC symbol sequences.
-
-**How it works:**
-- **Multilingual ASR Models:** Google Cloud Speech-to-Text / Microsoft Azure supporting 22 Indian languages
-- **Accent Adaptation:** Regional accent recognition (Punjabi-accented Hindi, Madras Tamil, etc.)
-- **Disfluency Handling:** Filters "um," "uh," repetitions common in natural speech
-- **Keyword Extraction:** Identifies core concepts from natural sentences
-- **Symbol Mapping Engine:** Converts words to available AAC symbols
-- **Sentence Simplification:** Breaks complex sentences into AAC-friendly chunks
-
-**Example:** 
-Teacher says (in Hindi): "बच्चों, अब हम सब बाथरूम जाएंगे और फिर लंच करेंगे, ठीक है?"
-
-System processes:
-1. ASR transcribes audio to text
-2. Keyword extraction: [बाथरूम, जाएंगे, लंच, करेंगे]
-3. Maps to symbols: [bathroom icon] [go icon] [then icon] [lunch icon] [eat icon]
-4. Child can tap sequence to repeat: "बाथरूम जाएंगे फिर लंच करेंगे"
+```text
+software_project/
+├── AGENTS.md
+├── README.md
+└── atlas/
+    ├── app/                   # Expo Router routes
+    │   ├── _layout.tsx        # fonts, theme, auth gate
+    │   ├── login.tsx
+    │   ├── (tabs)/
+    │   │   ├── index.tsx      # Speak
+    │   │   ├── board.tsx      # Board
+    │   │   ├── transcribe.tsx # Listen
+    │   │   ├── settings.tsx
+    │   │   └── emotions.tsx   # hidden debug route
+    │   ├── debug.tsx
+    │   └── modal.tsx
+    ├── components/            # shared UI, board and emotion components
+    ├── constants/             # colors, layout, tiles.json, tile builder
+    ├── state/                 # Zustand stores and auth provider
+    ├── services/              # OpenRouter, ElevenLabs, Firebase, OpenSymbols, ASR
+    ├── utils/                 # suggestions, translation, drawing capture
+    └── config/api.ts          # API keys, endpoints, board model
+```
 
 ---
 
-## 7. PRIVACY & SECURITY ARCHITECTURE
+## Data, persistence and privacy
 
-### **Federated Learning**
-**What it does:** Improves AI models using data from all users WITHOUT collecting personal information centrally.
+| Data                                                                  | Where it lives                                                                      |
+| --------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| Tiles, sentence, folder path, suggestions, settings, translated tiles | Memory only (reset on reload)                                                       |
+| Board interpretation cache, ElevenLabs audio cache (last 20)          | Memory only                                                                         |
+| Saved conversations                                                   | AsyncStorage `transcribe.conversations` (max 50, **text only; no audio is stored**) |
+| OpenSymbols cache and token                                           | AsyncStorage `opensymbols_cache`, `opensymbols_token`                               |
+| Auth session                                                          | Firebase SDK persistence                                                            |
 
-**How it works:**
-- **Local Model Training:** Each device trains personalization model on local data only
-- **Gradient Sharing:** Only model improvements (mathematical gradients) sent to central server
-- **Differential Privacy:** Adds mathematical noise to shared data preventing individual identification
-- **Secure Aggregation:** Combines learning from 1000s of devices without seeing individual data
-- **Model Distribution:** Improved global model pushed back to all devices
+**What leaves the device**
 
-**Example:** 10,000 children use Atlas. Each device learns locally. Only aggregated, anonymized patterns shared. Central model improves for everyone, but no child's individual data ever leaves their device.
+| Data                           | Sent to                                                                              |
+| ------------------------------ | ------------------------------------------------------------------------------------ |
+| Tile labels / sentence text    | OpenRouter, ElevenLabs                                                               |
+| Drawing image + up to 2 photos | OpenRouter                                                                           |
+| Speech audio                   | Browser's speech recognition service (Web Speech API)                                |
+| Camera frames                  | Processed locally by `face-api.js` (the script and models are fetched from jsDelivr) |
+| Symbol queries                 | OpenSymbols                                                                          |
 
----
+### ⚠️ Security notes (read before deploying)
 
-### **On-Device Machine Learning (Edge Computing)**
-**What it does:** Runs AI processing on the device itself rather than cloud servers.
-
-**How it works:**
-- **TensorFlow Lite Models:** Compressed neural networks optimized for mobile processors
-- **Neural Engine Utilization:** Uses Apple Neural Engine / Qualcomm AI Engine for acceleration
-- **Model Quantization:** Reduces model size from 100MB to 5MB without accuracy loss
-- **Offline-First Design:** 95% of functionality works without internet connectivity
-
-**Example:** Emotion detection, symbol prediction, speech synthesis all run locally. Only advanced AI suggestions (when needed) make API calls—and even then, no personal data sent, only context prompts.
-
----
-
-## 8. PERFORMANCE OPTIMIZATION SYSTEMS
-
-### **Lazy Loading & Asset Caching**
-**What it does:** Loads resources intelligently to maintain performance with 10,000+ symbols.
-
-**How it works:**
-- **Priority Queue System:** Loads most-likely-needed symbols first based on context
-- **Predictive Caching:** Pre-loads symbols likely to be needed in next 30 seconds
-- **Image Compression:** SVG optimization reducing symbol files to <5KB each
-- **Intelligent Pagination:** Loads symbols in batches of 50, dynamically as user scrolls
-- **Least Recently Used (LRU) Cache:** Keeps 500 most common symbols in fast-access memory
+- `EXPO_PUBLIC_*` values are **embedded in the client bundle**. Anyone can extract them.
+- OpenRouter, ElevenLabs, and OpenSymbols are called directly from the client.
+- `config/api.ts` logs the first 20 characters of configured keys, and `services/opensymbols.ts` logs the token's length and prefix.
+- **Before production:** put paid API calls behind a backend proxy and remove key logging.
 
 ---
 
-### **Predictive Prefetching**
-**What it does:** Anticipates user needs and loads resources before they're requested.
+## Current limitations
 
-**How it works:**
-- **Temporal Prediction:** At 7:55 AM, starts loading school vocabulary knowing 8 AM school arrival
-- **Location-Based Prefetch:** When GPS shows movement toward grandparents' house, loads family vocabulary
-- **Pattern Recognition:** If user typically explores "food" category after selecting "hungry," prefetches food symbols
+- Language is limited to English and Hindi, and Hindi needs a separate service running at `localhost:8244`. There is no deployed translation backend; if it is unreachable, original text is used.
+- Tiles, sentence, folder position, and settings do not persist across reloads.
+- Board has no pinch-zoom (`scale` is fixed at 1).
+- The OpenDyslexic font is loaded, but there is no visible toggle in Settings yet.
+- Saved conversations are labeled "recordings" in the UI, but no audio is stored or replayable.
+- Suggestions without the LLM are deterministic, not learned.
+- No test, lint, or typecheck pipeline.
 
----
+<details>
+<summary><b>Known dead or placeholder code</b></summary>
 
-## 9. INTEGRATION & SYNCHRONIZATION
+- `services/ai.ts`: placeholder, unused
+- `components/DrawingCanvas.tsx`: unused
+- `describeBoardContent()` in `components/InfiniteBoard.tsx`: exported but unused
+- `mapTranscriptToTiles`: exists but is not integrated
+- `components/__tests__/StyledText-test.js`: default snapshot test with no test script
+- `@tanstack/react-query`: installed but unused
 
-### **Multi-Device Cloud Sync Protocol**
-**What it does:** Keeps personalization data synchronized across phone, tablet, school device.
-
-**How it works:**
-- **Eventual Consistency Model:** Device changes sync when online, resolves conflicts intelligently
-- **Delta Synchronization:** Only transfers changed data, not entire database
-- **Conflict Resolution Algorithm:** When same symbol edited on two devices, most recent timestamp wins
-- **Offline Queue:** Stores sync operations when offline, executes when connectivity restored
-- **End-to-End Encryption:** AES-256 encryption for data in transit and at rest
-
----
-
-### **Parent-Teacher Dashboard Analytics**
-**What it does:** Provides insights to caregivers without compromising child privacy.
-
-**How it works:**
-- **Aggregated Metrics:** Shows trends (vocabulary growth, usage frequency) not raw data
-- **Progress Visualization:** Charts showing communication development over weeks/months
-- **Goal Setting Interface:** Teachers set learning objectives, system adapts suggestions accordingly
-- **Collaborative Vocabulary Building:** Parents add custom symbols visible to teachers (with permission)
+</details>
 
 ---
 
-## 10. CONTINUOUS IMPROVEMENT LOOP
+## Roadmap
 
-### **A/B Testing Framework**
-**What it does:** Experiments with different features to find what works best for each user type.
+Not implemented yet; listed as directions, not promises:
 
-**How it works:**
-- **Cohort Assignment:** Randomly assigns users to test different UI layouts, suggestion algorithms
-- **Statistical Significance Testing:** Uses chi-square tests to validate improvements
-- **Personalized Optimization:** Eventually each user gets version that works best for their profile
-- **Ethical Constraints:** Never tests features that could harm user experience
-
----
-
-### **Automated Model Retraining Pipeline**
-**What it does:** Continuously improves AI models based on aggregated learning.
-
-**How it works:**
-- **Monthly Model Updates:** Retrains prediction models on anonymized usage patterns
-- **Performance Regression Testing:** Ensures new models don't decrease accuracy for any user segment
-- **Gradual Rollout:** Pushes model updates to 10% of users first, monitors performance, then 100%
-- **Rollback Capability:** Instantly reverts to previous model if issues detected
+- **Production readiness:** backend/API proxy, persistent tiles and settings, real test/lint/typecheck pipeline
+- **Personalization:** learned next-word prediction (e.g. collaborative filtering, Markov models) and feedback-driven improvement
+- **Context awareness:** location / BLE / calendar-aware tile sets
+- **Platform reach:** native speech recognition, offline / on-device AI and sketch recognition, board pinch-zoom
+- **Sync and insights:** cloud sync, parent/teacher analytics dashboard
+- **Accessibility polish:** visible OpenDyslexic toggle
 
 ---
 
-## THE COMPLETE PERSONALIZATION FLOW
+## License
 
-**Real-World Example: Priya's Morning**
+_Add a license here (e.g. MIT) before publishing._
 
-**6:45 AM - Wakes Up**
-- **GPS System:** Detects home location
-- **Temporal Pattern Recognition:** Identifies morning routine window
-- **BLE Proximity:** Detects mother's phone
-- **Facial Recognition:** Camera detects sleepy expression
-- **Markov Chain:** Analyzes that mornings usually start with greetings
-- **LLM Integration:** Generates contextual suggestions
-- **Result:** Top suggestions appear: [Good morning Maa, Bathroom, Sleepy, Water, Hungry]
-
-**8:00 AM - Arrives at School**
-- **Geospatial Mapping:** School geofence triggered
-- **Context Switch:** Vocabulary set changes from home→school
-- **BLE Detection:** Teacher's tablet detected
-- **Predictive Prefetching:** Loads classroom-relevant symbols
-- **Result:** Suggestions shift: [Good morning Teacher, Present, Homework done, Doubt, Help needed]
-
-**12:00 PM - Lunch Break**
-- **Temporal Recognition:** Lunch time pattern detected
-- **Facial Recognition:** Excited expression (looking at lunchbox)
-- **Historical Pattern:** Priya always selects "hungry" at 12 PM
-- **Zone of Proximal Development:** System knows Priya ready for complex food descriptions
-- **Result:** Offers both basic [Hungry, Water] AND advanced [Lunchbox me paratha hai, Share with friend]
-
-**3:30 PM - Returns Home**
-- **GPS Transition:** School→Home detected
-- **Emotional State:** Tired expression detected
-- **Usage History:** After-school pattern = snack + rest + play
-- **RLHF Learning:** System learned that suggesting "Cartoon dekhna hai" after school gets 90% selection rate
-- **Result:** Prioritizes comfort symbols: [Tired, Snack, Cartoon, Rest, Play later]
-
-**7:00 PM - Festival Preparation (Diwali Week)**
-- **Cultural Calendar:** Diwali in 2 days detected
-- **Regional Customization:** Punjab location = specific Diwali vocabulary
-- **Collaborative Filtering:** Other Punjabi children asking about diyas, sweets
-- **Family Context:** Mother nearby (BLE), likely discussing festival prep
-- **Result:** Festival vocabulary elevated: [Diya, Rangoli, New clothes, Sweets, Crackers safe distance]
-
-**Over 3 Months:**
-- **Spaced Repetition:** 200 core symbols mastered
-- **Bayesian Knowledge Tracing:** System calculates 85% mastery probability
-- **Adaptive Learning:** Introduces next 100 symbols in emotions/descriptions
-- **Federated Learning:** Priya's anonymized patterns help improve models for all children
-- **Performance:** Communication time reduced from 15 seconds/phrase to 4 seconds/phrase
-
----
-
-## MEASURABLE IMPACT METRICS
-
-**System Success Indicators:**
-1. **Prediction Accuracy:** 65%+ of suggestions used within top 6 shown
-2. **Time to Expression:** <5 seconds for common phrases (vs 45 seconds without AI)
-3. **Vocabulary Growth:** 50 new symbols/month at appropriate pace
-4. **Emotional Engagement:** 75%+ sessions with positive/neutral emotions
-5. **Reduction in Frustration:** 80% fewer frustrated expressions during use
-6. **Parent Satisfaction:** 4.5+ star rating on ease of communication improvement
-
----
-
-This is how Atlas transforms from a simple AAC app into an **intelligent communication partner** that understands, adapts, and grows with every Indian child who deserves to be heard.
