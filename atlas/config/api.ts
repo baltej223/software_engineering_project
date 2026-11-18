@@ -42,3 +42,11 @@ export const API_ENDPOINTS = {
 export const BOARD_INTERPRETATION_MODEL =
   process.env.EXPO_PUBLIC_BOARD_INTERPRETATION_MODEL ||
   "google/gemini-3.1-flash-lite";
+
+/**
+ * Text-only model used to expand an incomplete tile sequence into phrases.
+ * This task is simple enough for a cheap flash-lite model; no image is sent.
+ */
+export const TILE_INTERPRETATION_MODEL =
+  process.env.EXPO_PUBLIC_TILE_INTERPRETATION_MODEL ||
+  "google/gemini-2.5-flash-lite";

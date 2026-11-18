@@ -33,6 +33,7 @@ import {
   createBoardFingerprint,
   getCachedBoardInterpretation,
   interpretBoard,
+  interpretTiles,
 } from '@/services/boardInterpretation';
 import type { BoardInterpretationResult } from '@/services/boardInterpretation';
 import { speak } from '@/services/elevenlabs';
@@ -477,29 +478,42 @@ export default function BoardScreen() {
       .sort((a, b) => (Math.abs(a.y - b.y) < 40 ? a.x - b.x : a.y - b.y))
       .map((placed) => placed.tile.label);
 
-    // Tiles alone are already a complete message. Do not spend a model call
-    // paraphrasing words the child chose explicitly.
-    if (strokes.length === 0 && placedImages.length === 0) {
-      const phrase = tileLabels.join(' ');
-      setInterpretationResult(
-        phrase
-          ? {
-              interpretations: [
-                { phrase, concept: 'tiles', confidence: 1 },
-              ],
-              uncertain: false,
-            }
-          : null
-      );
-      return;
-    }
-
     const fingerprint = createBoardFingerprint({
       strokes,
       placedTiles,
       placedImages,
     });
     boardFingerprintRef.current = fingerprint;
+
+    // Tile-only boards still get a model call: a telegraphic sequence like
+    // "I water" is incomplete, so ask a cheap text model to expand it.
+    if (strokes.length === 0 && placedImages.length === 0) {
+      setLoading(true);
+      try {
+        const result = await interpretTiles({ fingerprint, tileLabels });
+        if (boardFingerprintRef.current !== fingerprint) {
+          return;
+        }
+        setInterpretationResult(result);
+      } catch (error) {
+        console.error('Tile interpretation failed:', error);
+        const phrase = tileLabels.join(' ');
+        setInterpretationResult(
+          phrase
+            ? {
+                interpretations: [
+                  { phrase, concept: 'tiles', confidence: 0.5 },
+                ],
+                uncertain: true,
+              }
+            : null
+        );
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
     const cached = getCachedBoardInterpretation(fingerprint);
     if (cached) {
       setInterpretationResult(cached);

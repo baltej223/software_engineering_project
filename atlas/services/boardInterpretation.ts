@@ -2,6 +2,7 @@ import {
   API_ENDPOINTS,
   API_KEYS,
   BOARD_INTERPRETATION_MODEL,
+  TILE_INTERPRETATION_MODEL,
 } from "@/config/api";
 import type { PlacedImage, PlacedTile, Stroke } from "@/components/InfiniteBoard";
 import { createDeferred } from "@/utils/deferred";
@@ -22,6 +23,11 @@ export type BoardInterpretationInput = {
   drawingDataUrl?: string;
   photoDataUrls?: string[];
   tileLabels?: string[];
+};
+
+export type TileInterpretationInput = {
+  fingerprint: string;
+  tileLabels: string[];
 };
 
 type ImageContent = {
@@ -68,6 +74,31 @@ Rules:
 - "concept" is the visible object or idea the phrase is based on (for example "water", "sun", "food").
 - "confidence" is a number from 0 to 1 for that phrase.
 - Do not output explanations, headings, markdown, or anything outside the JSON object.`;
+
+export const TILE_INTERPRETATION_SYSTEM_PROMPT = `You expand an incomplete AAC tile sequence into short, natural phrases.
+
+Return JSON only:
+{"interpretations":[{"phrase":"I want water","concept":"water","confidence":0.84}],"uncertain":false}
+
+Rules:
+- The tiles are the child's chosen words. Preserve their meaning and order.
+- The sequence may be telegraphic. Add only the grammar or a very likely need that is missing.
+- Do not invent unrelated people, places, objects, or specific details.
+- Return 1-3 phrases, 2-6 words each, age-appropriate and natural.
+- Write from the child's perspective. If the tiles name another person, the phrase may refer to that person.
+- Use the same language as the tile labels.
+- If the sequence is ambiguous or could mean several unrelated things, return fewer phrases and set "uncertain": true.
+- If the tiles already form a complete phrase, return it as one option.
+- "concept" is the main idea (for example "water", "play", "home").
+- "confidence" is a number from 0 to 1.
+- Output no markdown or text outside the JSON object.
+
+Examples:
+Tiles: I → water
+{"interpretations":[{"phrase":"I want water","concept":"water","confidence":0.95},{"phrase":"I am thirsty","concept":"water","confidence":0.8}],"uncertain":false}
+
+Tiles: more → play
+{"interpretations":[{"phrase":"I want to play more","concept":"play","confidence":0.9},{"phrase":"Can we play more?","concept":"play","confidence":0.75}],"uncertain":false}`;
 
 export class BoardInterpretationError extends Error {
   code:
@@ -342,8 +373,15 @@ function buildUserContent(
   return content;
 }
 
-async function requestInterpretation(
-  input: BoardInterpretationInput
+function buildTileUserContent(tileLabels: string[]): string {
+  return `Tiles: ${tileLabels.join(" → ")}
+The sequence may be incomplete. Infer what the child most likely wants to say.
+Return only the JSON object.`;
+}
+
+async function requestChat(
+  model: string,
+  messages: ChatMessage[]
 ): Promise<BoardInterpretationResult> {
   if (!API_KEYS.OPENROUTER || API_KEYS.OPENROUTER.length < 20) {
     throw new BoardInterpretationError(
@@ -352,13 +390,8 @@ async function requestInterpretation(
     );
   }
 
-  const messages: ChatMessage[] = [
-    { role: "system", content: BOARD_INTERPRETATION_SYSTEM_PROMPT },
-    { role: "user", content: buildUserContent(input) },
-  ];
-
   const body = JSON.stringify({
-    model: BOARD_INTERPRETATION_MODEL,
+    model,
     messages,
     max_tokens: 350,
     temperature: 0.1,
@@ -375,7 +408,7 @@ async function requestInterpretation(
   let response = await fetchWithTimeout(body, headers);
 
   // One bounded retry for rate limits. Do not retry other failures: a second
-  // vision request costs money and usually returns the same error.
+  // model request costs money and usually returns the same error.
   if (response.status === 429) {
     const retryAfterHeader = response.headers.get("retry-after");
     const retryAfterSeconds = retryAfterHeader
@@ -427,14 +460,10 @@ async function requestInterpretation(
   return parseBoardInterpretation(raw);
 }
 
-/**
- * Interpret a board drawing. Results are cached by board fingerprint, and
- * concurrent requests for the same board share one in-flight promise.
- */
-export async function interpretBoard(
-  input: BoardInterpretationInput
+async function runWithCache(
+  key: string,
+  request: () => Promise<BoardInterpretationResult>
 ): Promise<BoardInterpretationResult> {
-  const key = `${BOARD_INTERPRETATION_MODEL}:${input.fingerprint}`;
   const cached = cache.get(key);
   if (cached) {
     return cached;
@@ -445,7 +474,7 @@ export async function interpretBoard(
     return existing;
   }
 
-  const request = requestInterpretation(input)
+  const promise = request()
     .then((result) => {
       // A retry should be able to ask again when the model was unsure.
       if (!result.uncertain && result.interpretations.length > 0) {
@@ -457,6 +486,42 @@ export async function interpretBoard(
       inFlight.delete(key);
     });
 
-  inFlight.set(key, request);
-  return request;
+  inFlight.set(key, promise);
+  return promise;
+}
+
+/**
+ * Interpret a board drawing. Results are cached by board fingerprint, and
+ * concurrent requests for the same board share one in-flight promise.
+ */
+export async function interpretBoard(
+  input: BoardInterpretationInput
+): Promise<BoardInterpretationResult> {
+  const key = `${BOARD_INTERPRETATION_MODEL}:${input.fingerprint}`;
+  const messages: ChatMessage[] = [
+    { role: "system", content: BOARD_INTERPRETATION_SYSTEM_PROMPT },
+    { role: "user", content: buildUserContent(input) },
+  ];
+
+  return runWithCache(key, () =>
+    requestChat(BOARD_INTERPRETATION_MODEL, messages)
+  );
+}
+
+/**
+ * Expand a tile-only board into likely AAC phrases. This is a text-only call
+ * against a cheap model: no image is captured or uploaded.
+ */
+export async function interpretTiles(
+  input: TileInterpretationInput
+): Promise<BoardInterpretationResult> {
+  const key = `${TILE_INTERPRETATION_MODEL}:${input.fingerprint}`;
+  const messages: ChatMessage[] = [
+    { role: "system", content: TILE_INTERPRETATION_SYSTEM_PROMPT },
+    { role: "user", content: buildTileUserContent(input.tileLabels) },
+  ];
+
+  return runWithCache(key, () =>
+    requestChat(TILE_INTERPRETATION_MODEL, messages)
+  );
 }
